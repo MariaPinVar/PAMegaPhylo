@@ -1,0 +1,328 @@
+#SCRIPT TO LOAD SHAPEFILES AND TRANSFORM THEM INTO PRESENCE/ABS MATRIX AND MANAGE-ORGANIZE DATASETS####
+# M. Pinilla Vargas pinillam@natur.cuni.cz
+#https://github.com/MariaPinVar/PAMegaPhylo.git
+# 27/06/2023
+########################################################################
+
+#First install the packages
+install.packages("raster")
+install.packages("rgdal")
+install.packages("sp")
+install.packages("terra")
+install.packages("sf")
+install.packages("dplyr")
+install.packages("rgeos")
+install.packages("data.table")
+install.packages("phylotools")
+install.packages("stringr")
+install.packages("rgbif")
+devtools::install_github("macroecology/letsR")
+devtools::install_github("jinyizju/V.PhyloMaker")
+install.packages("ape")
+install.packages("phangorn")
+install.packages("taxize")
+install.packages("FishPhyloMaker")
+
+# Load the libraries
+library(raster)
+library(rgdal)
+library(letsR)
+library(sp)
+library(terra)
+library(sf)
+library(rgeos)
+library(maptools)
+library(data.table)
+library(taxize)
+library(rgbif)
+library(dplyr)
+library(ape)
+library(phangorn)
+library(phylotools)
+library(V.PhyloMaker)
+library(stringr)
+library(FishPhyloMaker)
+
+#Select your base directory or metacentrum home folder
+#base='~/mariapinillav' for example
+base='/storage'
+
+##Define the working folder depending on the clade####
+
+clade='AMPHIBIANS'
+clade='MAMMALS'
+clade='REPTILES'
+clade='BIRDS'
+clade='SHARKS'
+clade='MAGNOLIAS'
+clade='BIRCHES'
+clade='PLANTS'
+clade='MARINEFISH'
+
+#Create the paths to your data and load your shapefiles
+path.to.distri=paste0(base,"/Distributions", "/",clade)
+route=(paste0(path.to.distri, "/", clade,"_PART3.shp"))#some datasets are split in parts, check the name of the parts in the folder.
+r=readOGR(route) 
+r=shapefile(paste0(path.to.distri, "/", clade,".shp")) # also works but it is slower to load
+
+###Run Presab matrix ######
+names(r)[names(r) == "sci_name"] <- "sciname"#Change the name of species field in the shapefile if needed
+plot(r)
+
+Presence.matrix <- lets.presab(r, xmn = -180, xmx = 180,
+                               ymn = -59.99, ymx = 90, res = 1, count = TRUE, remove.cells = FALSE) # Set the limits of your matrix, here we are using the full extent
+presab <- Presence.matrix$P
+extent(r)
+
+saveRDS(Presence.matrix, file = paste0(path.to.distri, "/", clade, "PART3_PresenceAbsenceMatrix.RDS")) #Save your matrix as RDS
+write.csv(presab,file = paste0(path.to.distri, "/", clade, "PART3_PresenceAbsenceMatrix.csv")) #Save your matrix as .csv
+
+plot(Presence.matrix$P)
+map('worldHires', fill=FALSE, add=TRUE,col='grey')
+
+
+#####BIRDS, only in case you have the BirdLife shapefile format, otherwise use the previous function#####
+geodatabase <- readOGR(dsn = paste0(path.to.distri, "/", clade,"."), layer = "All_Species")
+r=readOGR(route)
+PAM_birds <- lets.presab.birds(r, xmn = -180, xmx =180, 
+                               ymn =  -61.3927 , ymx = 80.2, res=1, count=TRUE)
+
+#####Load your PHYLOGENIES####
+
+phylo=(paste0(path.to.distri, "/", "PHYLO", "/", "output.nex"))
+phy <- read.nexus(phylo)
+consensus_tree <- consensus(phy)
+write.tree(consensus_tree, paste0(path.to.distri, "/", "PHYLO", "/", "consensus.nex"))
+plot.phylo(consensus_tree, type = "phylogram", cex = 0.5)
+
+#####Plot species richness maps######
+
+Presence.matrix <- readRDS(paste0(path.to.distri, "/", clade, "_PresenceAbsenceMatrix.RDS"))
+presab <- read.csv(paste0(path.to.distri, "/", clade, "_PresenceAbsenceMatrix.csv"))
+
+Presence.matrix_raster <- raster(Presence.matrix$Richness_Raster)
+blank_map <- raster(paste0(base,"/Distributions/bio01_1degr.asc"))
+
+ext <- extent(presab)
+resolution <- 1
+blank_raster <- raster(ext, resolution = resolution)
+blank_raster[] <- 0
+values(blank_raster) <- Presence.matrix$Richness_Raster
+plot(blank_map)
+apply(presab[,-(1:4)],1, sum)->sumx #check the number of extra rows to remove, sometimes is just lat/long 
+blank_map[]<-sumx
+
+plot(blank_map)
+
+
+#####Compare species names across data sets#####
+consensus_tree<-read.tree(paste0(path.to.distri, "/", "PHYLO", "/", "consensus.nex"))
+phylo.names<-as.character(consensus_tree[["tip.label"]])
+presab<-presence_absence$P
+
+#Remove _ and replace for space to fit the GBIF format
+phylo.names <- gsub("_", " ", phylo.names)
+distri.names <- colnames(presab)[-c(1,2,3)]
+distri.names <- gsub(" ", "_", distri.names)
+matches<-phylo.names[phylo.names %in% distri.names]
+
+#Subset the presab to only include the fields in the phylogeny
+
+curated.presab <- presab[, colnames(presab) %in% matches]
+write.csv(curated.presab,file = paste0(path.to.distri, "/", clade, "_MatchesPresenceAbsenceMatrix.csv"))
+
+####Check for synonyms####
+
+matches<-read.csv(paste0(path.to.distri, "/", clade, "_MatchesPresenceAbsenceMatrix.csv"))
+match.names <- colnames(matches)[-1]
+match.names <- gsub("_", " ", match.names)
+
+species_list <- setdiff(phylo.names,match.names) #Extract all the names that are not shared between phylo and presab
+species_list <- gsub("_", " ", species_list)
+
+
+#In case you still need to fit the GBIF format
+species_list_string <- gsub("^\"|\"$", "", species_diference)
+species_list <- gsub("\n", "", species_list_string)
+species_list <- gsub("c\\(", "", species_list)
+species_list <- gsub("\\)", "", species_list)
+
+# Print the resulting species vector
+print(species_list)
+
+#Load the GBIF synonym finder function
+get_known_synonyms <- function(species_name) {
+  # Use GBIF to get known synonyms for the species name
+  backbone_result <- name_backbone(name = species_name)
+  
+  if (!is.null(backbone_result)) {
+    synonyms <- backbone_result %>%
+    pull(species)
+    
+    return(unique(synonyms))
+  } else {
+    return(NULL)
+  }
+}
+
+# Create a Data frame to store updated species names
+updated_species <- data.frame(original_name = character(), updated_name = character(), stringsAsFactors = FALSE)
+
+# Loop through each species name in the list
+for (count in seq_along(species_list)) {
+  species_name <- species_list[count]
+  
+  # Try to get known synonyms for the species name
+  tryCatch({
+    # Get known synonyms for the species name
+    synonyms <- get_known_synonyms(species_name)
+    
+    # Pause for 1 second before the next API request
+    Sys.sleep(1)
+    
+    if (!is.null(synonyms)) {
+      # Choose the first known synonym as the updated name
+      updated_name <- synonyms[1]
+      
+      # Store the original and updated names in the data frame
+      updated_species <- rbind(updated_species, data.frame(original_name = species_name, updated_name = updated_name))
+    } else {
+      # If no known synonyms found, retain the original name
+      updated_species <- rbind(updated_species, data.frame(original_name = species_name, updated_name = species_name))
+    }
+    
+    # Print the count and species name being processed
+    cat("Processed:", count, "of", length(species_list), "- Species:", species_name, updated_name,"\n")
+  }, error = function(e) {
+    # Handle the error (e.g., print a message)
+    cat("Error processing species:", species_name, "\n")
+  })
+}
+
+# Print the updated species names
+print(updated_species)
+updated_species=updated_species[-1,]
+updated_species.format <- updated_species %>%
+  mutate(original_name = sub(" ", "_", original_name),
+         updated_name = sub(" ", "_", updated_name))
+
+write.csv(updated_species, paste0(path.to.distri,"/", clade, "_compare_Synonyms.csv")) #Save your synonym comparison list
+new_names <- ifelse(updated_species$original_name == updated_species$updated_name, NA, updated_species$updated_name)
+new_names.clean <- na.omit(new_names)
+write.csv(new_names.clean, paste0(path.to.distri,"/", clade, "_Synonyms.csv")) #Save only the synonyms
+
+
+
+#Check where the synonyms come from, e.g. which of the two datasets is less updated (phylogeny vs. shapefile)
+new_names.format<-sub("\\.", " ", new_names.clean)
+synonyms.distri <- setdiff(distri.names,new_names.clean)
+synonyms.phylo <- setdiff(phylo.names,new_names.clean)
+
+###Add the new names to the original name vectors
+phylo.names.df <- data.table(name=phylo.names)
+
+tochange <- phylo.names.df[, chmatch(name, updated_species$original_name, nomatch = 0)]
+tochange#check how many names are going to be updated
+set(phylo.names.df, i = which(tochange > 0), j = "name", value = updated_species$updated_name[tochange])
+
+#Check if it worked
+phylo.names.corr <- phylo.names.df$name
+phylo.names.corr<-gsub("_", ".", phylo.names.corr)
+synonyms.phylo.2 <- setdiff(phylo.names.corr,new_names.clean)
+
+#Update the matches and the presab columns
+matches.corr<-phylo.names.corr[phylo.names.corr %in% distri.names]
+matches.corr<-gsub(" ", "\\.", matches.corr)
+syno.presab <- presab[, colnames(presab) %in% matches.corr]
+
+#In case there are synonyms only in the distri name vector
+colnames2<-colnames(presab)
+distri.names.df<-data.table(name=colnames2)
+tochange <- distri.names.df[, chmatch(name, updated_species$original_name, nomatch = 0)]
+set(distri.names.df, i = which(tochange > 0), j = "name", value = updated_species$updated_name[tochange])
+
+#Save the updated presab matrix
+write.csv(syno.presab,file = paste0(path.to.distri, "/", clade, "_Matches_Syno_PresenceAbsenceMatrix.csv"))
+
+#Change the names in the phylogeny consensus tree####
+
+consensus_tree<-read.tree(paste0(path.to.distri, "/", "PHYLO", "/", "consensus.nex"))
+
+
+###Add the new names to the original name vectors and remove the "_"
+new.tips <- data.table(name=consensus_tree$tip.label)
+old.tips<-data.table(name=consensus_tree$tip.label)
+
+updated_species.format<-read.csv(paste0(path.to.distri, "/", clade, "_compare_Synonyms.csv"))
+updated_species.format$original_name <- gsub(" ", "_", updated_species.format$original_name)
+updated_species.format$updated_name <- gsub(" ", "_", updated_species.format$updated_name)
+
+
+tochange <- new.tips[, chmatch(name, updated_species.format$original_name, nomatch = 0)]
+set(new.tips, i = which(tochange > 0), j = "name", value = updated_species.format$updated_name[tochange])
+consensus.tree.df<- consensus_tree[["tip.label"]] 
+
+all.tips<-data.frame(old.tips,new.tips)
+
+corrected.tree <- sub.taxa.label(consensus_tree, all.tips)
+write.tree(corrected.tree, paste0(path.to.distri, "/", "PHYLO", "/", "corrected_consensus.nex"))
+plot.phylo(corrected.tree, type = "phylogram", cex = 0.5)
+
+
+#Get clades from the plant megaphylogeny####
+
+distri.names.df<-data.table(species=distri.names)
+distri.names.df$genus <- str_extract(distri.names.df$species, "^[[:alpha:]]+")
+distri.names.df$family2 <- r2$family[match(distri.names.df$species, r2$sci_name)]
+distri.names.df <- distri.names.df %>%
+  mutate(family = coalesce(family2, family))%>%
+  select(-family2)
+distri.names.df$family <- str_to_title(distri.names.df$family)
+
+#When there is only one family in the dataset.
+distri.names.df <- distri.names.df %>%
+    mutate(family = "NA")
+
+
+result<-phylo.maker(distri.names.df, scenarios=c("S1","S2","S3") ) # run the function S.PhyloMaker.
+plot.phylo(result$scenario.1, cex = 1.5, main = "scenario.1")
+
+write.tree(result$scenario.1, paste0(path.to.distri, "/", "PHYLO", "/", "consensus.nex"))
+
+
+#For the fish megaphylogeny
+
+taxon_data <- FishTaxaMaker(distri.names, allow.manual.insert = TRUE) #creates the Fishbase dataset
+res_phylo <- FishPhyloMaker(data = taxon_data$Taxon_data_FishPhyloMaker,
+                            insert.base.node = TRUE, 
+                            return.insertions = TRUE, 
+                            progress.bar = TRUE)
+
+plot(res_phylo$Phylogeny, cex = 0.7)
+
+
+###Merge the presab parts for split datasets ###
+presab.all<-merge(BIRDSO_Phyto_PresenceAbsenceMatrix,BIRDSPiaya_Q_PresenceAbsenceMatrix)
+presab.all.2<-merge(presab.all, BIRDSN_PresenceAbsenceMatrix)
+presab.all.3<-merge(presab.all.2, BIRDSM_PresenceAbsenceMatrix)
+presab.all.4<-merge(presab.all.3, BIRDSI_L_corr_PresenceAbsenceMatrix)
+presab.all.5<-merge(presab.all.4, BIRDST_Z_corr_PresenceAbsenceMatrix)
+presab.all.6<-merge(presab.all.5, BIRDSR_S_corr_PresenceAbsenceMatrix)
+presab.all.7<-merge(presab.all.6, BIRDSE_H_corr_PresenceAbsenceMatrix)
+presab.all.8<-merge(presab.all.7, BIRDS_A_Capi_PresenceAbsenceMatrix)
+presab.all.9<-merge(presab.all.8, BIRDS_Capri_D_PresenceAbsenceMatrix)
+write.csv(presab.all2,file = paste0(path.to.distri, "/", clade, "All_PresenceAbsenceMatrix.csv"))
+
+
+###Filter the traits#####
+
+traits<-read.csv(paste0(path.to.distri, "/", "TRAITS",'/','Traits.csv'))
+traits.sp<-traits$MSW05_Binomial
+
+presab <- read.csv(paste0(path.to.distri, "/", clade, "_Matches_Syno_PresenceAbsenceMatrix.csv"))
+presab.names <- colnames(presab)[-c(1)]
+presab.names.format<-sub("\\.", " ", presab.names)
+matches<-traits.sp[traits.sp %in% presab.names.format]
+matching.traits<-subset(traits, traits$MSW05_Binomial%in%matches)
+write.csv(matching.traits,file = paste0(path.to.distri, "/", 'TRAITS','/', clade,'_Matching_traits.csv'))
+
